@@ -525,15 +525,7 @@ label:hover .onhover { display: inline; }
                     &raquo;
                   </button>
 
-                  <button id="pull-data-lansweeper-button" 
-			type="submit" class="btn btn-success" 
-			onclick="$('#question > form input[name=method]').val('pull-lansweeper-data')">
-		      From Lansweeper &raquo; 
-
-
-                 {# This is DEBUG functionality for reverting a question to an un-answered state, which differs from being answered but with null via the Skip/Clear button. #}
-                  </button>
-
+                  {# This is DEBUG functionality for reverting a question to an un-answered state, which differs from being answered but with null via the Skip/Clear button. #}
                   {% if answer_obj and DEBUG %}
                     <button id="clear-button"
                       type="submit" class="btn btn-link" style="color: #999; font-size: 0.9em;"
@@ -959,7 +951,7 @@ $(function() {
                   return false;
               }
           }
-        
+        }
 
         // Assemble the form submission data.
         //
@@ -1003,40 +995,10 @@ $(function() {
             }
         });
 
-        
-	} else if (method == "pull-lansweeper-data"){
-			ajax_with_indicator({ 
-			url: "{{task.get_absolute_url|escapejs}}/_pull_lansweeper_data", 
-			method: "GET", 
-			indicator_parent: $('#question'), 
-			success: function(lansweeperdata) {
-				alert("stuff from lansweeper: \n" +lansweeperdata); 
-			
-			  	var $lsdata = $('<form id="lsdata">);
-				lsdata.append($('<input>', { type:"checkbox", id:"potanswer1", name:"potanswer1", value: lansweeperdata }))
-				lsdata.append($('<label>', { for:"potanswer1"}).text(lansweeperdata))
-				lsdata.append($('<button>', { id:"InsertSelectedAnswer", type:"button" , class:"btn btn-primary, onclick:"addToAnswer"}).text("Use Selected Answer"))
-				("#question").after($lsdata);
-
-
-					}
-				});
-			}	
-	// don't do an actual <form> submit
+        // don't do an actual <form> submit
         return false;
     });
 })
-
-
-
-
-function addToAnswer(){
-	selectedradio = $('input[name=potanswer]:checked','#lsdata').val();
-	$('#inputctrl').val(selectedradio);
-	$('#save-button').prop("disabled", false);
-
-}
-
 
 {% if answer_obj and can_review %}
 function update_review_status(elem) {

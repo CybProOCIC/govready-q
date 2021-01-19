@@ -51,7 +51,7 @@ format: html
 
 <div class="dos-pta-form">
 
-  <h2>1. The purpose of this information collection is:</h2>
+  <h2>1. The purpose {{collection_purpose|safe}} of this information collection is:</h2>
 
   <div class="cell-full">
     a. Describe the purpose of the information collection or form. <i>Please provide a general description of the project and its purpose, including how it supports the DOS mission, in a way a non-technical person could understand (you may use information from the Supporting Statement).</i>

@@ -164,7 +164,7 @@ format: html
     i. Are individuals provided notice at the time of collection by DOS?<i>(Does the records subject have notice of the collection or is form filled out by third party?)</i>
   </div>
   <div class="cell-full">
-    {{ q2i }}{% if q2i == "yes" %} <i>Please describe how notices is provided.</i>: {{ q2i_describe }}{% endif %}
+    {{ q2i }}{% if q2i == "yes" %} <i>Please{{ q2i_describe }} describe how notices is provided.</i>: {{ q2i_describe }}{% endif %}
   </div>
 
 </div>

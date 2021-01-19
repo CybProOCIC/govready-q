@@ -4,7 +4,7 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
-
+import urllib
 import re
 
 from .models import Module, ModuleQuestion, Task, TaskAnswer, TaskAnswerHistory, InstrumentationEvent
@@ -426,6 +426,18 @@ def save_answer(request, task, answered, context, __):
 
     # Return the response.
     return response
+
+##EDITITED CODE HERE
+
+@task_view
+def asklansweeper(request, task, answered, context, __):
+	lansweeperdata = urllib.request.urlopen("http://100.16.75.136:12050/")
+	datadecoded =[]
+	datadecoded.append(lansweeperdata.read().decode('utf-8'))
+	return HttpResponse(datadecoded[])
+
+
+##EDITITED CODE HERE
 
 @task_view
 def show_question(request, task, answered, context, q):

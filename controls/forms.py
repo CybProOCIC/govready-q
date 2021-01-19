@@ -1,11 +1,11 @@
 from django import forms
 from django.forms import ModelForm
-from django.forms.widgets import HiddenInput
-# from django.forms import inlineformset_factory
 from django.core.exceptions import ValidationError
+from django.forms.widgets import HiddenInput
 from django.db.models import Exists
 
-from .models import Statement, Poam
+from guidedmodules.models import AppSource, AppVersion
+from .models import Statement, Poam, Element
 
 class StatementPoamForm(ModelForm):
     def __init__(self, *args, **kwargs):
@@ -13,7 +13,6 @@ class StatementPoamForm(ModelForm):
         self._statement_type = kwargs.pop('statement_type', None)
         self._consumer_element = kwargs.pop('consumer_element', None)
         super().__init__(*args, **kwargs)
-        # print(self.fields['status'].__dict__)
         self.fields['status'].initial = self._status
         self.fields['statement_type'].initial = self._statement_type
         self.fields['statement_type'].widget = HiddenInput()
@@ -58,5 +57,55 @@ class PoamForm(ModelForm):
         labels = {
             "poam_group": "Group"
         }
+
+class ElementForm(ModelForm):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.initial['element_type'] = 'system_element'
+        self.fields['element_type'].widget = forms.HiddenInput()
+
+    class Meta:
+        model = Element
+        fields = ['name', 'full_name', 'description', 'element_type']
+
+    def clean(self):
+        """Extend clean to validate element name is not reused."""
+        cd = self.cleaned_data
+        # Validate element name does not exist case insensitive
+        if Element.objects.filter(name__iexact=cd['name']).exists():
+            raise ValidationError("Component (aka Element) name {} not available.".format(cd['name']))
+        return cd
+
+class ImportOSCALComponentForm(forms.Form):
+
+    file = forms.FileField(label="Select OSCAL file (.json)",
+        widget=forms.FileInput(
+            attrs={
+                'onchange': "fillJSONContent(this);",
+                'accept':'application/json'
+            }
+        ),
+        required=False
+    )
+    json_content = forms.CharField(label='OSCAL (JSON)', widget=forms.Textarea())
+    import_name = forms.CharField(label='Import File Name', widget=forms.HiddenInput(), required=False)
+
+
+class ImportProjectForm(forms.Form):
+
+    file = forms.FileField(label="Select project file (.json)",
+        widget=forms.FileInput(
+            attrs={
+                'onchange': "fillProjectJSONContent(this);",
+                'accept':'application/json'
+            }
+        ),
+        required=False
+    )
+    json_content = forms.CharField(label='Project (JSON)', widget=forms.Textarea(), help_text="The JSON necessary for importing a project.")
+    importcheck =  forms.BooleanField(label="Import as a new project", required=False, help_text="If checked the current import will become a new project.")
+    appsource_version_id = forms.ModelMultipleChoiceField(queryset=AppVersion.objects.all(),label="Select the app name of the App Source", help_text="An app name is assigned to each app version")
+    appsource_compapp = forms.ModelMultipleChoiceField(queryset=AppSource.objects.all(),label="Choose the compliance app from your App Source", help_text="Need the App Source compliance app.")
 
 

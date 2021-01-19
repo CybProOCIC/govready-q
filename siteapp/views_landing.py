@@ -3,20 +3,15 @@
 # subdomains.
 
 from django import forms
-from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import Permission
 from django.db import transaction
-from django.http import (Http404, HttpResponse, HttpResponseForbidden,
-                         HttpResponseNotAllowed, HttpResponseRedirect,
+from django.http import (Http404, HttpResponse, HttpResponseRedirect,
                          JsonResponse)
-from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-
 from system_settings.models import SystemSettings
-
 from .forms import PortfolioSignupForm
 from .models import Organization, Portfolio, User
 from .notifications_helpers import notification_reply_email_hook
@@ -31,6 +26,8 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 logger = get_logger()
 # logger = logging.getLogger(__name__)
 
+LOGIN = "login"
+SIGNUP = "signup"
 
 def homepage(request):
     # Main landing page.
@@ -46,7 +43,7 @@ def homepage(request):
     signup_form.fields['username'].widget.attrs.pop("autofocus", None)
     login_form.fields['login'].widget.attrs.pop("autofocus", None)
 
-    if request.POST.get("action") == "signup":
+    if SIGNUP in request.path or request.POST.get("action") == SIGNUP:
         signup_form = SignupForm(request.POST)
         portfolio_form = PortfolioSignupForm(request.POST)
         if (request.user.is_authenticated or signup_form.is_valid()) and portfolio_form.is_valid():
@@ -55,6 +52,9 @@ def homepage(request):
                 if not request.user.is_authenticated:
                     # Create account.
                     new_user = signup_form.save(request)
+                    # Add default permission, view AppSource
+                    new_user.user_permissions.add(Permission.objects.get(codename='view_appsource'))
+                    new_user.save()
 
                     # Log them in.
                     from django.contrib.auth import authenticate, login
@@ -95,7 +95,7 @@ def homepage(request):
 
                 return HttpResponseRedirect("/projects")
 
-    elif request.POST.get("action") == "login":
+    elif LOGIN in request.path or request.POST.get("action") == LOGIN:
         login_form = LoginForm(request.POST, request=request)
         if login_form.is_valid():
             login_form.login(request)

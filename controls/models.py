@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import json
 from django.db import models
@@ -5,11 +6,39 @@ from django.utils.functional import cached_property
 from guardian.shortcuts import (assign_perm, get_objects_for_user,
                                 get_perms_for_model, get_user_perms,
                                 get_users_with_perms, remove_perm)
+from simple_history.models import HistoricalRecords
+
 from .oscal import Catalogs, Catalog
 import uuid
-
+import tools.diff_match_patch.python3 as dmp_module
+from copy import deepcopy
+from django.db import transaction
 
 BASELINE_PATH = os.path.join(os.path.dirname(__file__),'data','baselines')
+ORGPARAM_PATH = os.path.join(os.path.dirname(__file__),'data','org_defined_parameters')
+
+class ImportRecord(models.Model):
+    name = models.CharField(max_length=100, help_text="File name of the import", unique=False, blank=True, null=True)
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated = models.DateTimeField(auto_now=True, db_index=True)
+    uuid = models.UUIDField(default=uuid.uuid4, editable=True, help_text="Unique identifier for this Import Record.")
+
+    def get_components_statements(self):
+        components = Element.objects.filter(import_record=self)
+        component_statements = {}
+
+        for component in components:
+            component_statements[component] = Statement.objects.filter(producer_element=component)
+
+        return component_statements
+
+STATEMENT_SYNCHED = 'synched'
+STATEMENT_NOT_SYNCHED = 'not_synched'
+STATEMENT_ORPHANED = 'orphaned'
+
+class SystemException(Exception):
+    """Class for raising custom exceptions with Systems"""
+    pass
 
 class Statement(models.Model):
     sid = models.CharField(max_length=100, help_text="Statement identifier such as OSCAL formatted Control ID", unique=False, blank=True, null=True)
@@ -24,22 +53,25 @@ class Statement(models.Model):
     updated = models.DateTimeField(auto_now=True, db_index=True)
 
     parent = models.ForeignKey('self', help_text="Parent statement", related_name="children", on_delete=models.SET_NULL, blank=True, null=True)
+    prototype = models.ForeignKey('self', help_text="Prototype statement", related_name="instances", on_delete=models.SET_NULL, blank=True, null=True)
     producer_element = models.ForeignKey('Element', related_name='statements_produced', on_delete=models.SET_NULL, blank=True, null=True, help_text="The element producing this statement.")
     consumer_element = models.ForeignKey('Element', related_name='statements_consumed', on_delete=models.SET_NULL, blank=True, null=True, help_text="The element the statement is about.")
     mentioned_elements = models.ManyToManyField('Element', related_name='statements_mentioning', blank=True, help_text="All elements mentioned in a statement; elements with a first degree relationship to the statement.")
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, help_text="A UUID (a unique identifier) for this Statement.")
-
+    import_record = models.ForeignKey(ImportRecord, related_name="import_record_statements", on_delete=models.CASCADE,
+                                      unique=False, blank=True, null=True, help_text="The Import Record which created this Statement.")
+    history = HistoricalRecords(cascade_delete_history=True)
     class Meta:
         indexes = [models.Index(fields=['producer_element'], name='producer_element_idx'),]
         permissions = [('can_grant_smt_owner_permission', 'Grant a user statement owner permission'),]
         ordering = ['producer_element__name', 'sid']
 
     def __str__(self):
-        return "'%s %s %s %s id=%d'" % (self.statement_type, self.sid, self.pid, self.sid_class, self.id)
+        return "'%s %s %s %s %s'" % (self.statement_type, self.sid, self.pid, self.sid_class, self.id)
 
     def __repr__(self):
         # For debugging.
-        return "'%s %s %s %s id=%d'" % (self.statement_type, self.sid, self.pid, self.sid_class, self.id)
+        return "'%s %s %s %s %s'" % (self.statement_type, self.sid, self.pid, self.sid_class, self.id)
 
     @cached_property
     def producer_element_name(self):
@@ -58,21 +90,111 @@ class Statement(models.Model):
         """Return the control content from the catalog"""
         # Get instance of the control catalog
         catalog = Catalog.GetInstance(catalog_key=self.sid_class)
-        catalog_control_dict = catalog.get_flattended_controls_all_as_dict()
+        catalog_control_dict = catalog.get_flattened_controls_all_as_dict()
         # Look up control by ID
         return catalog_control_dict[self.sid]
 
+    def create_prototype(self):
+        """Creates a prototype statement from an existing statement and prototype object"""
+
+        if self.prototype is not None:
+            # Prototype already exists for statement
+            return self.prototype
+            # check if prototype content is the same, report error if not, or overwrite if permission approved
+        prototype = deepcopy(self)
+        prototype.statement_type="control_implementation_prototype"
+        prototype.consumer_element_id = None
+        prototype.id = None
+        prototype.save()
+        # Set prototype attribute on the instances to newly created prototype
+        self.prototype = prototype
+        self.save()
+        return self.prototype
+
+    def create_instance_from_prototype(self, consumer_element_id):
+        """Creates a control_implementation statement instance for a system's root_element from an existing control implementation prototype statement"""
+
+        # TODO: Check statement is a prototype
+
+        # System already has instance of the control_implementation statement
+        # TODO: write check for this logic
+        # Get all statements for consumer element so we can identify
+        smts_existing = Statement.objects.filter(consumer_element__id = consumer_element_id, statement_type = "control_implementation")
+        print(smts_existing)
+        # Get prototype ids for all consumer element statements
+        smts_existing_prototype_ids = [smt.prototype.id for smt in smts_existing]
+        if self.id is smts_existing_prototype_ids:
+            return self.prototype
+
+        #     # TODO:
+        #     # check if prototype content is the same, report error if not, or overwrite if permission approved
+
+        instance = deepcopy(self)
+        instance.statement_type="control_implementation"
+        instance.consumer_element_id = consumer_element_id
+        instance.id = None
+        # Set prototype attribute to newly created instance
+        instance.prototype = self
+        instance.save()
+        return instance
+
+    @property
+    def prototype_synched(self):
+        """Returns one of STATEMENT_SYNCHED, STATEMENT_NOT_SYNCHED, STATEMENT_ORPHANED for control_implementations"""
+
+        if self.statement_type == "control_implementation":
+            if self.prototype:
+                if self.body == self.prototype.body:
+                    return STATEMENT_SYNCHED
+                else:
+                    return STATEMENT_NOT_SYNCHED
+            else:
+                return STATEMENT_ORPHANED
+        else:
+            return STATEMENT_NOT_SYNCHED
+
+    @property
+    def diff_prototype_main(self):
+        """Generate a diff of statement of type `control_implementation` and its prototype"""
+
+        if self.statement_type != 'control_implementation':
+            # TODO: Should we return None or raise error because statement is not of type control_implementation?
+            return None
+        if self.prototype is None:
+            # TODO: Should we return None or raise error because statement does not have a prototype?
+            return None
+        dmp = dmp_module.diff_match_patch()
+        diff = dmp.diff_main(self.prototype.body, self.body)
+        return diff
+
+    @property
+    def diff_prototype_prettyHtml(self):
+        """Generate a diff of statement of type `control_implementation` and its prototype"""
+
+        if self.statement_type != 'control_implementation':
+            # TODO: Should we return None or raise error because statement is not of type control_implementation?
+            return None
+        if self.prototype is None:
+            # TODO: Should we return None or raise error because statement does not have a prototype?
+            return None
+        dmp = dmp_module.diff_match_patch()
+        diff = dmp.diff_main(self.prototype.body, self.body)
+        return dmp.diff_prettyHtml(diff)
+
     # TODO:c
     #   - On Save be sure to replace any '\r\n' with '\n' added by round-tripping with excel
+
 
 class Element(models.Model):
     name = models.CharField(max_length=250, help_text="Common name or acronym of the element", unique=True, blank=False, null=False)
     full_name =models.CharField(max_length=250, help_text="Full name of the element", unique=False, blank=True, null=True)
     description = models.CharField(max_length=255, help_text="Brief description of the Element", unique=False, blank=False, null=False)
-    element_type = models.CharField(max_length=150, help_text="Statement type", unique=False, blank=True, null=True)
+    element_type = models.CharField(max_length=150, help_text="Component type", unique=False, blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True, db_index=True)
     updated = models.DateTimeField(auto_now=True, db_index=True)
     uuid = models.UUIDField(default=uuid.uuid4, editable=True, help_text="A UUID (a unique identifier) for this Element.")
+    import_record = models.ForeignKey(ImportRecord, related_name="import_record_elements", on_delete=models.CASCADE,
+                                      unique=False, blank=True, null=True, help_text="The Import Record which created this Element.")
 
     # Notes
     # Retrieve Element controls where element is e to answer "What controls selected for a system?" (System is an element.)
@@ -132,6 +254,37 @@ class Element(models.Model):
         else:
             # print("User does not have permission to assign selected controls to element's system.")
             return False
+
+    def statements(self, statement_type):
+        """Return on the statements of statement_type produced by this element"""
+        smts = Statement.objects.filter(producer_element = self, statement_type = statement_type)
+        return smts
+
+    @transaction.atomic
+    def copy(self, name=None):
+        """Return a copy of an existing system element as a new element with duplicate control_implementation_prototype statements"""
+
+        # Copy only elements that are components. Do not copy an element of type "system"
+        # Components that are systems should always be associated with a project (at least currently).
+        # Also, statement structure for a system would be very different.
+        if self.element_type == "system":
+            raise SystemException("Copying an entire system is not permitted.")
+
+        e_copy = deepcopy(self)
+        e_copy.id = None
+        if name is not None:
+            e_copy.name = name
+        else:
+            e_copy.name = self.name + " copy"
+        e_copy.save()
+        # Copy prototype statements from existing element
+        for smt in self.statements("control_implementation_prototype"):
+            smt_copy = deepcopy(smt)
+            smt_copy.producer_element = e_copy
+            smt_copy.consumer_element_id = None
+            smt_copy.id = None
+            smt_copy.save()
+        return e_copy
 
     @property
     def selected_controls_oscal_ctl_ids(self):
@@ -470,6 +623,46 @@ class Baselines (object):
     @property
     def body(self):
         return self.legacy_imp_smt
+
+class OrgParams(object):
+    """
+    Represent list of organizational defined parameters. Temporary
+    class to work with default org params.
+    """
+    
+    _singleton = None
+    
+    def __new__(cls):
+        if cls._singleton is None:
+            cls._singleton = super(OrgParams, cls).__new__(cls)
+            cls._singleton.init()
+            
+        return cls._singleton
+    
+    def init(self):
+        global ORGPARAM_PATH
+        self.cache = {}
+
+        path = Path(ORGPARAM_PATH)
+        for f in path.glob("*.json"):
+            name, values = self.load_param_file(f)
+            if name in self.cache:
+                raise Exception("Duplicate default organizational parameters name {} from {}".format(name, f))
+            self.cache[name] = values
+    
+    def load_param_file(self, path):
+        with path.open("r") as json_file:
+            data = json.load(json_file)
+            if 'name' in data and 'values' in data:
+                return (data["name"], data["values"])
+            else:
+                raise Exception("Invalid organizational parameters file {}".format(path))
+                
+    def get_names(self):
+        return self.cache.keys()
+    
+    def get_params(self, name):
+        return self.cache.get(name, {})
 
 class Poam(models.Model):
     statement = models.OneToOneField(Statement, related_name="poam", unique=False, blank=True, null=True, on_delete=models.CASCADE, help_text="The Poam details for this statement. Statement must be type Poam.")

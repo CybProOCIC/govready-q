@@ -7,6 +7,7 @@ from django.db import transaction
 import urllib
 import re
 
+from discussion.validators import validate_file_extension
 from .models import Module, ModuleQuestion, Task, TaskAnswer, TaskAnswerHistory, InstrumentationEvent
 
 import guidedmodules.module_logic as module_logic
@@ -280,6 +281,11 @@ def save_answer(request, task, answered, context, __):
             # just return immediately.
             if value is None:
                 return JsonResponse({ "status": "ok", "redirect": redirect_to() })
+
+            uploaded_file = value
+            validation_result = validate_file_extension(uploaded_file)
+            if validation_result != None:
+                return validation_result
 
         else:
             # All other values come in as string fields. Because
@@ -1404,9 +1410,9 @@ def authoring_download_app_project(request, task):
 def authoring_new_question(request, task):
     # Find a new unused question identifier.
     ids_in_use = set(task.module.questions.values_list("key", flat=True))
-    key = 0
-    while "q" + str(key) in ids_in_use: key += 1
-    key = "q" + str(key)
+    entry = 0
+    while "q" + str(entry) in ids_in_use: entry += 1
+    entry = "q" + str(entry)
 
     # Get the highest definition_order in use so far.
     definition_order = max([0] + list(task.module.questions.values_list("definition_order", flat=True))) + 1
@@ -1415,14 +1421,14 @@ def authoring_new_question(request, task):
     if task.module.spec.get("type") == "project":
         # Probably in app.yaml
         spec = {
-            "id": key,
+            "id": entry,
             "type": "module",
             "title": "New Question Title",
             "protocol": ["choose-a-module-or-enter-a-protocol-id"],
         }
         # # Make a new modular spec
-        # mspec = {"id": key,
-        #          "title": key.replace("_"," ").title(),
+        # mspec = {"id": entry,
+        #          "title": entry.replace("_"," ").title(),
         #          "questions": [
         #             {"id": "mqo",
         #              "type": "text",
@@ -1436,22 +1442,22 @@ def authoring_new_question(request, task):
         # new_module = Module(
         #     source=task.module.app.source,
         #     app=task.module.app,
-        #     module_name=key,
+        #     module_name=entry,
         #     spec=mspec
         # )
         # new_module.save()
 
         # spec = {
-        #    "id": key,
+        #    "id": entry,
         #    "type": "module",
         #    "title": "New Question Title",
-        #    "module-id": key,
+        #    "module-id": entry,
         # }
 
         # # Make a new question instance.
         # question = ModuleQuestion(
         #     module=task.module,
-        #     key=key,
+        #     entry=entry,
         #     definition_order=definition_order,
         #     spec=spec
         #     )
@@ -1459,7 +1465,7 @@ def authoring_new_question(request, task):
 
     else:
         spec = {
-            "id": key,
+            "id": entry,
             "type": "text",
             "title": "New Question Title",
             "prompt": "Enter some text.",
@@ -1468,7 +1474,7 @@ def authoring_new_question(request, task):
         # Make a new question instance.
         question = ModuleQuestion(
             module=task.module,
-            key=key,
+            key=entry,
             definition_order=definition_order,
             spec=spec
             )

@@ -12,6 +12,7 @@ from .settings import *
 
 urlpatterns = [
     url(r"^$", views.homepage, name="homepage"),
+    url(r"^login$", views.homepage, name="homepage"),
     url(r"^(privacy|terms-of-service|love-assessments)$", views.shared_static_pages),
 
     url(r'^api/v1/projects/(?P<project_id>\d+)/answers$', views_landing.project_api),
@@ -31,8 +32,8 @@ urlpatterns = [
     url(r"^discussion/", include("discussion.urls")),
 
     # Controls and Systems
-    url(r"^controls/", include("controls.urls")),
     url(r"^systems/", include("controls.urls")),
+    url(r"^controls/", include("controls.urls")),
 
     # app store
     url(r'^store$', views.apps_catalog, name="store"),
@@ -47,9 +48,10 @@ urlpatterns = [
     url(r'^projects/(\d+)/__rename$', views.rename_project, name="rename_project"),
     url(r'^projects/(\d+)/__delete$', views.delete_project, name="delete_project"),
     url(r'^projects/(\d+)/__admins$', views.make_revoke_project_admin, name="make_revoke_project_admin"),
-    url(r'^projects/(\d+)/__export$', views.export_project, name="export_project"),
-    url(r'^projects/(\d+)/__import$', views.import_project_data, name="import_project_data"),
+    url(r'^projects/(\d+)/__export$', views.export_project_questionnaire, name="export_project_questionnaire"),
+    url(r'^projects/(\d+)/__import$', views.import_project_questionnaire, name="import_project_questionnaire"),
     url(r'^projects/(\d+)/__upgrade$', views.upgrade_project, name="upgrade_project"),
+    url(r'^projects/(\d+)/__move$', views.move_project, name="move_project"),
     url(r'^projects/(\d+)/(?:[\w\-]+)()$', views.project), # must be last because regex matches some previous URLs
     url(r'^projects/(\d+)/(?:[\w\-]+)(/settings)$', views.project_settings, name="project_settings"),
     url(r'^projects/(\d+)/(?:[\w\-]+)(/startapps)$', views.project_start_apps), # must be last because regex matches some previous URLs
@@ -58,8 +60,10 @@ urlpatterns = [
     url(r'^projects/(\d+)/(?:[\w\-]+)(/api)$', views.project_api), # must be last because regex matches some previous URLs
 
     # portfolios
-    url(r'^portfolios$', views.portfolio_list),
+    url(r'^portfolios$', views.portfolio_list, name="list_portfolios"),
     url(r'^portfolios/new$', views.new_portfolio),
+    url(r'^portfolios/(?P<pk>.*)/delete$', views.delete_portfolio, name="delete_portfolio"),
+    url(r'^portfolios/(?P<pk>.*)/edit$', views.edit_portfolio, name="edit_portfolio"),
     url(r'^portfolios/(?P<pk>.*)/projects$', views.portfolio_projects, name="portfolio_projects"),
     url(r'^portfolio/update_permissions', views.update_permissions, name="update_permissions"),
 
@@ -95,11 +99,15 @@ urlpatterns = [
 ]
 
 if 'django.contrib.auth.backends.ModelBackend' in settings.AUTHENTICATION_BACKENDS:
-    # If username/password logins are enabled, add the login pages.
+    # If username/pwd logins are enabled, add the login pages.
     urlpatterns += [
         # auth
         # next line overrides signup with our own view so we can monitor signup attempts, can comment out to go back to allauth's functionality
         url(r'^accounts/signup/', signup_wrapper, name="account_signup"),
+        # Disregard re-routing login to home page. Instead, use custom templates to style aullauth templates
+        # Necessary to keep existing routing in place to support links from invitation acceptance page
+        # and proper routing of "NEXT" url to project after after accepting invitation
+        # login button will redirect to the homepage with a login form
         url(r'^accounts/', include('allauth.urls')),
     ]
 

@@ -1,4 +1,11 @@
+from collections import ChainMap
 from itertools import chain
+import logging
+import structlog
+from structlog import get_logger
+from structlog.stdlib import LoggerFactory
+from typing import Dict
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AbstractUser
@@ -10,18 +17,13 @@ from django.utils import crypto, timezone
 from guardian.shortcuts import (assign_perm, get_objects_for_user,
                                 get_perms_for_model, get_user_perms,
                                 get_users_with_perms, remove_perm)
-from controls.models import System, Element
+from controls.models import System, Element, OrgParams
 from jsonfield import JSONField
 
-import logging
 logging.basicConfig()
-import structlog
-from structlog import get_logger
-from structlog.stdlib import LoggerFactory
 structlog.configure(logger_factory=LoggerFactory())
 structlog.configure(processors=[structlog.processors.JSONRenderer()])
 logger = get_logger()
-# logger = logging.getLogger(__name__)
 
 
 class User(AbstractUser):
@@ -212,7 +214,8 @@ class User(AbstractUser):
         try:
             del profile["picture"]["content_dataurl"]
         except:
-            pass
+            logger.warning(event="render_context_dict",
+                msg="Failed to delete profile picture content_dataurl")
 
         # Add username to profile
         profile["username"] = self.username
@@ -302,12 +305,13 @@ class User(AbstractUser):
 from django.contrib.auth.backends import ModelBackend
 class DirectLoginBackend(ModelBackend):
     # Register in settings.py!
-    # Django can't log a user in without their password. In views::accept_invitation
+    # Django can't log a user in without their pwd. In views::accept_invitation
     # we log a user in when they demonstrate ownership of an email address.
     supports_object_permissions = False
     supports_anonymous_user = False
     def authenticate(self, user_object=None):
         return user_object
+
 
 subdomain_regex = r"^([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\-]*[a-zA-Z0-9])$"
 
@@ -390,6 +394,34 @@ class Organization(models.Model):
         pm.save()
 
         return org
+
+    def get_parameter_values(self, catalog_key) -> Dict[str, str]:
+        """
+        Return a dictionary of organizational settings for a given catalog key
+        Keys are OSCAL style parameter identifiers, e.g. 'ac-1_prm_1' would be the
+        first parameter for ac-1.
+        """
+
+        settings = self.organizationalsetting_set.filter(catalog_key=catalog_key)
+        return dict((setting.parameter_key, setting.value) for setting in settings)
+
+class OrganizationalSetting(models.Model):
+    """
+    Captures an organizationally-defined setting for a parameterized control
+    in a catalog.
+    """
+    
+    class Meta:
+        unique_together = ('organization', 'catalog_key', 'parameter_key',)
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    catalog_key = models.CharField(max_length=255)
+    parameter_key = models.CharField(max_length=255)
+    value = models.CharField(max_length=1024)
+
+    def __str__(self):
+        org_name = (self.organization and self.organization.name) or 'none'
+        return f"OrganizationalSetting({org_name}, {self.catalog_key}, {self.parameter_key})"
 
 class Portfolio(models.Model):
     title = models.CharField(max_length=255, help_text="The title of this Portfolio.", unique=True)
@@ -1191,6 +1223,28 @@ class Project(models.Model):
             print("Updating {}".format(new_module_questions[key]))
         print("Update complete.")
         return True
+
+
+    def get_default_parameter_name(self):
+        # TODO: using 'mod_fedramp', but somehow we need to determine
+        # the correct name 
+        return "mod_fedramp"
+
+    def get_parameter_values(self, catalog_id) -> Dict[str, str]:
+        """
+        Return a dictionary of organizational settings for a given catalog identifier.
+        Default values come from the baseline controls.models.OrgParams;
+        each Organization can override via OrganizationalSettings.
+        """
+
+        # start with the baseline defaults
+        default_params = OrgParams().get_params(self.get_default_parameter_name())
+
+        # get the organizational settings into dict form
+        org_params = self.organization.get_parameter_values(catalog_id)
+
+        # merge and return
+        return ChainMap(org_params, default_params)
 
 class ProjectMembership(models.Model):
     project = models.ForeignKey(Project, related_name="members", on_delete=models.CASCADE, help_text="The Project this is defining membership for.")
